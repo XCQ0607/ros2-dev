@@ -8,7 +8,7 @@ RUN apt-get update && apt-get install -y wget gnupg lsb-release \
     && wget https://packages.osrfoundation.org/gazebo.gpg -O /usr/share/keyrings/pkgs-osrf-archive-keyring.gpg \
     && echo "deb [arch=$(dpkg --print-architecture) signed-by=/usr/share/keyrings/pkgs-osrf-archive-keyring.gpg] http://packages.osrfoundation.org/gazebo/ubuntu-stable $(lsb_release -cs) main" | tee /etc/apt/sources.list.d/gazebo-stable.list > /dev/null
 
-# 3. 安装基础工具、ROS 组件 (含 robot_localization) 和 Gazebo Harmonic
+# 3. 安装基础工具、ROS 组件
 RUN apt-get update && apt-get install -y \
     ros-humble-foxglove-bridge \
     ros-humble-rmw-cyclonedds-cpp \
@@ -31,33 +31,46 @@ RUN apt-get update && apt-get install -y \
     sudo \
     && rm -rf /var/lib/apt/lists/*
 
-# 4. 安装 Python 依赖 (新增 PX4 消息生成库 + YOLO 算法库)
-# numpy, jinja2, kconfiglib, pyros-genmsg 是 px4_msgs 编译必须的
-# ultralytics, pandas, matplotlib, supervision 等是 YOLO 运行所需的
-RUN pip3 install --no-cache-dir \
-    transforms3d \
-    scipy \
-    pyserial \
-    pymavlink \
-    numpy \
+# ==============================================================================
+# 4. Python 依赖分层安装 (解决空间不足和冲突警告)
+# ==============================================================================
+
+# 4.1: 轻量级工具和 PX4 编译依赖
+# 使用 --ignore-installed 避免 pip 试图卸载 apt 安装的包
+RUN pip3 install --no-cache-dir --ignore-installed \
     jinja2 \
     kconfiglib \
     jsonschema \
     pyros-genmsg \
-    ultralytics \
-    supervision \
-    pandas \
-    matplotlib \
-    seaborn \
-    tqdm \
+    pyserial \
+    pymavlink \
     pyyaml \
     requests \
-    scikit-learn \
+    tqdm \
+    termcolor
+
+# 4.2: 科学计算库 (Numpy/Scipy/Pandas)
+# 这些库经常和 apt 的 python3-numpy 冲突，使用 --ignore-installed 强制覆盖
+RUN pip3 install --no-cache-dir --ignore-installed \
+    numpy \
+    pandas \
+    scipy \
+    matplotlib \
+    seaborn \
+    transforms3d \
+    shapely \
+    scikit-learn
+
+# 4.3: 巨型 AI 库 (单独一层，防止构建崩溃)
+# PyTorch/Ultralytics 体积巨大，单独放在最后
+RUN pip3 install --no-cache-dir --ignore-installed \
     lapx \
-    shapely
+    supervision \
+    ultralytics
+
+# ==============================================================================
 
 # 5. 编译安装 Micro-XRCE-DDS-Agent
-# 这是 PX4 与 ROS 2 通讯的中间件代理
 WORKDIR /tmp
 RUN git clone https://github.com/eProsima/Micro-XRCE-DDS-Agent.git && \
     cd Micro-XRCE-DDS-Agent && \
@@ -68,29 +81,18 @@ RUN git clone https://github.com/eProsima/Micro-XRCE-DDS-Agent.git && \
     ldconfig /usr/local/lib/ && \
     rm -rf /tmp/Micro-XRCE-DDS-Agent
 
-# ==============================================================================
-# 6. 源码编译核心库：ros_gz, sdformat_urdf, px4_msgs, px4_ros_com
-# 将目录更名为 overlay_ws，因为现在不仅仅是 gz 的东西了
-# ==============================================================================
+# 6. 源码编译核心库 (Overlay Workspace)
 WORKDIR /opt/overlay_ws/src
 
-# 6.1 ros_gz (Humble分支) - 连接 ROS 2 和 Gazebo Harmonic
-RUN git clone -b humble https://github.com/gazebosim/ros_gz.git
-
-# 6.2 sdformat_urdf (Humble分支) - 让 ROS 2 能解析新的 SDF
-RUN git clone -b humble https://github.com/ros/sdformat_urdf.git
-
-# 6.3 px4_msgs (Main分支) - PX4 的 ROS 2 消息定义
-RUN git clone https://github.com/PX4/px4_msgs.git
-
-# 6.4 px4_ros_com (Main分支) - PX4 的 ROS 2 转换逻辑
-RUN git clone https://github.com/PX4/px4_ros_com.git
+# 6.1 Clone 仓库
+RUN git clone -b humble https://github.com/gazebosim/ros_gz.git && \
+    git clone -b humble https://github.com/ros/sdformat_urdf.git && \
+    git clone https://github.com/PX4/px4_msgs.git && \
+    git clone https://github.com/PX4/px4_ros_com.git
 
 WORKDIR /opt/overlay_ws
 
-# 6.5 安装依赖并编译所有包
-# export GZ_VERSION=harmonic 对 ros_gz 和 sdformat_urdf 生效
-# px4 包会忽略这个变量，不受影响
+# 6.2 编译所有包
 RUN apt-get update && \
     . /opt/ros/humble/setup.sh && \
     export GZ_VERSION=harmonic && \
@@ -99,12 +101,11 @@ RUN apt-get update && \
     --skip-keys="ignition-gazebo8 libignition-gazebo8-dev libignition-math7 libignition-msgs10 libignition-transport13" && \
     colcon build --merge-install --cmake-args -DCMAKE_BUILD_TYPE=Release && \
     rm -rf /var/lib/apt/lists/*
-# ==============================================================================
 
-# 7. 设置环境变量
+# 7. 设置环境
 ENV RMW_IMPLEMENTATION=rmw_cyclonedds_cpp
 
-# 8. 创建用户并设置无密码 Sudo
+# 8. 用户权限设置
 ARG USERNAME=dev
 ARG USER_UID=1000
 ARG USER_GID=$USER_UID
@@ -115,12 +116,9 @@ RUN groupadd --gid $USER_GID $USERNAME \
     && echo "$USERNAME ALL=(ALL) NOPASSWD:ALL" > /etc/sudoers.d/$USERNAME \
     && chmod 0440 /etc/sudoers.d/$USERNAME
 
-# 自动 source ROS 和 Overlay Workspace
-# 这样用户一进入容器，ros2 topic list 就能看到 px4 的消息类型，也能运行 bridge
 RUN echo "source /opt/ros/humble/setup.bash" >> /home/$USERNAME/.bashrc && \
     echo "source /opt/overlay_ws/install/setup.bash" >> /home/$USERNAME/.bashrc
 
-# 准备用户工作空间目录
 WORKDIR /home/ros2/workspace
 RUN chown -R $USERNAME:$USERNAME /home/ros2/workspace
 
