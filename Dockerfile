@@ -31,8 +31,9 @@ RUN apt-get update && apt-get install -y \
     sudo \
     && rm -rf /var/lib/apt/lists/*
 
-# 4. 安装 Python 依赖 (新增 PX4 消息生成所需的库)
+# 4. 安装 Python 依赖 (新增 PX4 消息生成库 + YOLO 算法库)
 # numpy, jinja2, kconfiglib, pyros-genmsg 是 px4_msgs 编译必须的
+# ultralytics, pandas, matplotlib, supervision 等是 YOLO 运行所需的
 RUN pip3 install --no-cache-dir \
     transforms3d \
     scipy \
@@ -42,7 +43,18 @@ RUN pip3 install --no-cache-dir \
     jinja2 \
     kconfiglib \
     jsonschema \
-    pyros-genmsg
+    pyros-genmsg \
+    ultralytics \
+    supervision \
+    pandas \
+    matplotlib \
+    seaborn \
+    tqdm \
+    pyyaml \
+    requests \
+    scikit-learn \
+    lapx \
+    shapely
 
 # 5. 编译安装 Micro-XRCE-DDS-Agent
 # 这是 PX4 与 ROS 2 通讯的中间件代理
