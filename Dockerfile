@@ -27,7 +27,7 @@ RUN apt-get update && apt-get install -y \
     iputils-ping \
     net-tools \
     python3-pip \
-    python3-opencv \
+    # python3-opencv \
     sudo \
     && rm -rf /var/lib/apt/lists/*
 
@@ -44,7 +44,7 @@ RUN pip3 install --no-cache-dir --ignore-installed \
     pyros-genmsg \
     pyserial \
     pymavlink \
-    pyyaml \
+    # pyyaml \
     requests \
     tqdm \
     termcolor
@@ -52,7 +52,8 @@ RUN pip3 install --no-cache-dir --ignore-installed \
 # 4.2: 科学计算库 (Numpy/Scipy/Pandas)
 # 这些库经常和 apt 的 python3-numpy 冲突，使用 --ignore-installed 强制覆盖
 RUN pip3 install --no-cache-dir --ignore-installed \
-    numpy \
+    "numpy<2.0.0" \
+    "opencv-python<=4.8.1.78" \
     pandas \
     scipy \
     matplotlib \
